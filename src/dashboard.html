@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>投递管家 · 投递看板</title>
+    <link rel="stylesheet" href="./dashboard.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">投</span>
+        <div>
+          <h1>投递看板</h1>
+          <p>每一次投递都会记录在这里，数据仅保存在本机浏览器。</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="exportCsvBtn" class="secondary" type="button">导出 CSV</button>
+        <button id="clearAllBtn" class="danger ghost" type="button">清空全部</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="stats" id="statsRow"></section>
+
+      <section class="toolbar">
+        <div class="pills" id="statusPills"></div>
+        <div class="toolbar-right">
+          <select id="platformFilter" class="select" aria-label="按平台筛选"></select>
+          <input id="searchInput" class="input" type="search" placeholder="搜索公司 / 岗位..." />
+        </div>
+      </section>
+
+      <section class="table-card">
+        <table class="app-table">
+          <thead>
+            <tr>
+              <th>公司</th>
+              <th>岗位</th>
+              <th>平台</th>
+              <th>城市</th>
+              <th>薪资</th>
+              <th>投递时间</th>
+              <th>状态</th>
+              <th class="th-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty hidden">
+          <div class="empty-icon">📮</div>
+          <p>还没有投递记录</p>
+          <p class="empty-hint">去 Boss直聘 / 猎聘 / 智联等网站点击“立即沟通”或“投递简历”，会自动记录到这里；<br />不支持的网站可以用插件弹窗里的“记录本页投递”。</p>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="./dashboard.js"></script>
+  </body>
+</html>

@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "OpenJobAutofill",
-  "version": "1.0.2",
-  "description": "Local resume profile helper with privacy-first AI page analysis and one-click form filling.",
-  "homepage_url": "https://github.com/Br1an67/OpenJobAutofill",
+  "name": "投递管家",
+  "version": "2.0.0",
+  "description": "一键填写网申表单，自动记录每次投递的公司、岗位与进展状态，数据全部保存在本机。",
   "permissions": [
     "activeTab",
     "alarms",
     "scripting",
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://api.github.com/*"
@@ -27,8 +27,22 @@
     "service_worker": "src/background.js",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.zhipin.com/*",
+        "https://*.liepin.com/*",
+        "https://*.zhaopin.com/*",
+        "https://*.51job.com/*",
+        "https://*.nowcoder.com/*",
+        "https://*.lagou.com/*"
+      ],
+      "js": ["src/tracker-content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
-    "default_title": "OpenJobAutofill",
+    "default_title": "投递管家",
     "default_popup": "src/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

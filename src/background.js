@@ -1,3 +1,5 @@
+import * as Tracker from "./tracker-core.js";
+
 const DEFAULT_API_CONFIG = {
   mode: "openai-compatible",
   baseUrl: "https://api.openai.com/v1",
@@ -30,6 +32,9 @@ const STORAGE_KEYS = {
 
 const PROFILE_PANEL_STATE_KEY = "OJAF_PROFILE_PANEL_STATE";
 const MAX_PROFILE_PANEL_STATE_ITEMS = 20;
+// 本项目已从上游独立（投递管家），暂未启用自己的 Release 通道，
+// 关闭在线更新检查，避免把用户引导到上游旧版本。
+const UPDATE_CHECK_ENABLED = false;
 const UPDATE_ALARM_NAME = "OJAF_CHECK_RELEASE_UPDATE";
 const UPDATE_CHECK_INTERVAL_MINUTES = 12 * 60;
 const UPDATE_REPOSITORY = "Br1an67/OpenJobAutofill";
@@ -79,7 +84,7 @@ void setupUpdateAlarm().catch(() => undefined);
 void refreshUpdateBadge().catch(() => undefined);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || typeof message.type !== "string" || !message.type.startsWith("OJAF_")) {
+  if (!message || typeof message.type !== "string" || !/^(OJAF_|TD_)/.test(message.type)) {
     return undefined;
   }
 
@@ -124,6 +129,24 @@ async function handleMessage(message) {
       return checkForUpdate({ reason: message.payload?.reason || "manual" });
     case "OJAF_OPEN_UPDATE_PAGE":
       return openUpdatePage(message.payload || {});
+    case "TD_ADD_RECORD":
+      return Tracker.addRecord(message.payload || {}, message.payload?.source || "auto");
+    case "TD_LIST_RECORDS":
+      return {
+        records: await Tracker.listRecords(),
+        statuses: Tracker.getStatusLabels(),
+        platforms: Tracker.getPlatformLabels()
+      };
+    case "TD_GET_SUMMARY":
+      return Tracker.summarize(await Tracker.listRecords());
+    case "TD_UPDATE_STATUS":
+      return Tracker.updateStatus(message.payload?.id, message.payload?.status, message.payload?.note);
+    case "TD_UPDATE_RECORD":
+      return Tracker.updateFields(message.payload?.id, message.payload?.patch || {});
+    case "TD_DELETE_RECORD":
+      return Tracker.deleteRecord(message.payload?.id);
+    case "TD_CLEAR_RECORDS":
+      return Tracker.clearRecords();
     default:
       throw new Error(`Unknown message type: ${message.type}`);
   }
@@ -161,6 +184,9 @@ async function clearSettings() {
 }
 
 async function setupUpdateAlarm() {
+  if (!UPDATE_CHECK_ENABLED) {
+    return;
+  }
   if (!chrome.alarms?.create) {
     return;
   }
@@ -206,6 +232,13 @@ async function getUpdateState() {
 }
 
 async function checkForUpdate(options = {}) {
+  if (!UPDATE_CHECK_ENABLED) {
+    return {
+      status: "current",
+      currentVersion: getCurrentVersion(),
+      message: `当前版本 ${getCurrentVersion()}（独立版本，未启用在线更新检查）。`
+    };
+  }
   const reason = options.reason || "manual";
   const currentVersion = getCurrentVersion();
 

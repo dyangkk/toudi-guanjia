@@ -4,13 +4,12 @@ const els = {
   startAutofillBtn: document.getElementById("startAutofillBtn"),
   showProfilePanelBtn: document.getElementById("showProfilePanelBtn"),
   clearMarksBtn: document.getElementById("clearMarksBtn"),
-  updateStatus: document.getElementById("updateStatus"),
-  checkUpdateBtn: document.getElementById("checkUpdateBtn"),
-  openUpdateBtn: document.getElementById("openUpdateBtn")
+  tdSummary: document.getElementById("tdSummary"),
+  tdOpenDashboard: document.getElementById("tdOpenDashboard"),
+  tdRecordPage: document.getElementById("tdRecordPage")
 };
 
 const DEFAULT_START_LABEL = els.startAutofillBtn.textContent;
-const DEFAULT_CHECK_UPDATE_LABEL = els.checkUpdateBtn.textContent;
 
 els.openOptions.addEventListener("click", () => chrome.runtime.openOptionsPage());
 els.startAutofillBtn.addEventListener("click", () => {
@@ -22,11 +21,11 @@ els.showProfilePanelBtn.addEventListener("click", () => {
 els.clearMarksBtn.addEventListener("click", () => {
   void clearMarks();
 });
-els.checkUpdateBtn.addEventListener("click", () => {
-  void checkUpdate();
+els.tdOpenDashboard.addEventListener("click", () => {
+  void openDashboard();
 });
-els.openUpdateBtn.addEventListener("click", () => {
-  void openUpdatePage();
+els.tdRecordPage.addEventListener("click", () => {
+  void recordCurrentPage();
 });
 
 initialize();
@@ -34,7 +33,7 @@ initialize();
 async function initialize() {
   try {
     setStatus("点击开始填写后，右下角会实时显示当前是本地规则还是 AI；AI 不可用也能继续用本地规则填写。");
-    await syncUpdateStatus();
+    await syncTrackerSummary();
     await syncRuntimeState();
   } catch (error) {
     setStatus(`读取页面失败：${error.message}`, true);
@@ -127,72 +126,74 @@ async function clearMarks() {
   }
 }
 
-async function syncUpdateStatus() {
+async function syncTrackerSummary() {
   try {
-    const state = await sendRuntimeMessage({ type: "OJAF_GET_UPDATE_STATUS" });
-    renderUpdateStatus(state || {});
+    const summary = await sendRuntimeMessage({ type: "TD_GET_SUMMARY" });
+    renderTrackerSummary(summary || {});
   } catch (error) {
-    renderUpdateStatus({ status: "error", error: error.message });
+    els.tdSummary.textContent = `读取投递记录失败：${error.message}`;
   }
 }
 
-async function checkUpdate() {
-  els.checkUpdateBtn.disabled = true;
-  els.checkUpdateBtn.textContent = "检查中...";
-  renderUpdateStatus({ status: "checking" });
-  try {
-    const state = await sendRuntimeMessage({
-      type: "OJAF_CHECK_FOR_UPDATE",
-      payload: { reason: "manual-popup" }
-    });
-    renderUpdateStatus(state || {});
-  } catch (error) {
-    renderUpdateStatus({ status: "error", error: error.message });
-  } finally {
-    els.checkUpdateBtn.disabled = false;
-    els.checkUpdateBtn.textContent = DEFAULT_CHECK_UPDATE_LABEL;
-  }
-}
-
-async function openUpdatePage() {
-  try {
-    await sendRuntimeMessage({ type: "OJAF_OPEN_UPDATE_PAGE" });
-    renderUpdateStatus({
-      message: "已打开 Release 页面。更新前建议先到设置页导出资料备份；更新时不要卸载扩展，覆盖或重新加载后本机资料和 API 设置会保留。"
-    });
-  } catch (error) {
-    renderUpdateStatus({ status: "error", error: error.message });
-  }
-}
-
-function renderUpdateStatus(state = {}) {
-  if (!els.updateStatus) {
+function renderTrackerSummary(summary = {}) {
+  const total = Number(summary.total || 0);
+  const today = Number(summary.today || 0);
+  const byStatus = summary.byStatus || {};
+  const interview = Number(byStatus.interview || 0);
+  const offer = Number(byStatus.offer || 0);
+  if (!total) {
+    els.tdSummary.textContent = "还没有投递记录。在招聘网站点击“立即沟通 / 投递简历”会自动记录；也可以用下面的按钮手动记录本页。";
     return;
   }
-
-  els.updateStatus.textContent = formatUpdateStatus(state);
-  els.updateStatus.classList.toggle("is-new", state.status === "available");
-  els.updateStatus.classList.toggle("error", state.status === "error");
+  els.tdSummary.textContent = `共 ${total} 条投递，今日 ${today} 条，面试 ${interview}，Offer ${offer}。`;
 }
 
-function formatUpdateStatus(state = {}) {
-  if (state.message) {
-    return state.message;
+async function openDashboard() {
+  await chrome.tabs.create({ url: chrome.runtime.getURL("src/dashboard.html") });
+  window.close();
+}
+
+async function recordCurrentPage() {
+  els.tdRecordPage.disabled = true;
+  els.tdRecordPage.textContent = "记录中...";
+  try {
+    const [tab] = await queryTabs({ active: true, currentWindow: true });
+    if (!tab?.id) {
+      throw new Error("No active tab found.");
+    }
+    const guess = parseTitleGuess(tab.title);
+    const result = await sendRuntimeMessage({
+      type: "TD_ADD_RECORD",
+      payload: {
+        url: tab.url,
+        company: guess.company,
+        jobTitle: guess.jobTitle,
+        source: "manual"
+      }
+    });
+    if (result?.duplicate) {
+      setStatus("这一页已经记录过啦，可以在看板里查看。");
+    } else {
+      setStatus("已记录本页投递。公司 / 岗位名如有偏差，可在看板里修改。");
+    }
+    await syncTrackerSummary();
+  } catch (error) {
+    setStatus(`记录失败：${error.message}`, true);
+  } finally {
+    els.tdRecordPage.disabled = false;
+    els.tdRecordPage.textContent = "记录本页投递";
   }
-  if (state.status === "checking") {
-    return "正在检查 GitHub Release...";
-  }
-  if (state.status === "available") {
-    const version = state.latestVersion ? ` ${state.latestVersion}` : "";
-    return `发现新版本${version}。更新前建议先到设置页导出资料备份；点击“打开 Release 页面”下载更新。不要卸载扩展，覆盖或重新加载后本机资料和 API 设置会保留。`;
-  }
-  if (state.status === "current") {
-    return `当前已是最新版本 ${state.currentVersion || chrome.runtime.getManifest().version}。`;
-  }
-  if (state.status === "error") {
-    return `检查更新失败：${state.error || "请稍后重试"}`;
-  }
-  return `当前版本 ${chrome.runtime.getManifest().version}。插件会定期检查 GitHub Release。`;
+}
+
+function parseTitleGuess(title) {
+  const parts = String(title || "")
+    .split(/[_\-|·｜—]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return {
+    jobTitle: parts[0] || "",
+    company: parts.length >= 2 ? parts[1] : ""
+  };
 }
 
 function formatRuntimeAiNote(aiUsage = {}, elapsed = "") {
