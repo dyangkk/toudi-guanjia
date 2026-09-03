@@ -525,10 +525,44 @@
         document.querySelector(".job-card-wrapper");
       const info = extractBossCard(card, {}) || {};
       if (info.jobTitle || info.company) {
-        return { platform, ...info, url: info.url || location.href, source: "manual" };
+        return {
+          platform,
+          ...info,
+          url: info.url || location.href,
+          source: "manual",
+          confidence: assessConfidence(info)
+        };
       }
     }
     const generic = extractDetailPage();
-    return { platform, ...generic, url: location.href, source: "manual" };
+    return {
+      platform,
+      ...generic,
+      url: location.href,
+      source: "manual",
+      confidence: assessConfidence(generic)
+    };
+  }
+
+  // 置信度评估：手动记录前的验证，避免把无关页面记成投递
+  function assessConfidence(info = {}) {
+    const title = String(info.jobTitle || "").trim();
+    // 明显的导航页标题直接判低
+    if (!title || /^(首页|登录|注册|消息|聊天|我的|个人中心|搜索|官网|首页.+)$/.test(title)) {
+      return "low";
+    }
+    // URL 是岗位详情页
+    if (/\/(job_detail|job|position|vacancy|career|apply)/i.test(location.pathname)) {
+      return "high";
+    }
+    // 页面上有岗位卡片
+    if (document.querySelectorAll(JOB_CARD_SELECTOR).length > 0) {
+      return "high";
+    }
+    // 同时有岗位名和公司线索
+    if (info.company) {
+      return "medium";
+    }
+    return "low";
   }
 })();

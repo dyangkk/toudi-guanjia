@@ -314,6 +314,26 @@
     return "web";
   }
 
+  function localAssessConfidence(info = {}) {
+    if (getFreshFillState()) {
+      return "high";
+    }
+    const title = String(info.jobTitle || "").trim();
+    if (!title || /^(首页|登录|注册|消息|聊天|我的|个人中心|搜索|官网|首页.+)$/.test(title)) {
+      return "low";
+    }
+    if (/\/(job_detail|job|position|vacancy|career|apply)/i.test(location.pathname)) {
+      return "high";
+    }
+    if (document.querySelector(JOB_CARD_SELECTOR)) {
+      return "high";
+    }
+    if (info.company) {
+      return "medium";
+    }
+    return "low";
+  }
+
   function buildFormSubmitPayload(state, trigger) {
     const fields = Array.isArray(state.fields) ? state.fields : [];
     const findByLabel = (re) => {
@@ -456,7 +476,16 @@
     if (message?.type === "TD_RECORD_PAGE") {
       void (async () => {
         try {
-          const extracted = await bridgeRequest("extract");
+          let extracted = await bridgeRequest("extract");
+          if (!extracted) {
+            // 页面世界不可达时用本地提取 + 本地置信度评估
+            const local = localExtract();
+            extracted = { ...local, url: location.href, source: "manual", confidence: localAssessConfidence(local) };
+          }
+          // 本页被插件填写过 → 置信度直接拉满
+          if (getFreshFillState()) {
+            extracted.confidence = "high";
+          }
           sendResponse({ ok: true, data: extracted });
         } catch (error) {
           sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });

@@ -169,19 +169,36 @@ async function recordCurrentPage() {
     if (!tab?.id) {
       throw new Error("No active tab found.");
     }
-    // 优先让页面里的追踪脚本做精确提取（Boss 卡片 Vue 数据等）
+    // 优先让页面里的追踪脚本做精确提取 + 置信度验证
     let payload = null;
+    let lowConfidence = false;
     try {
       const response = await sendTabMessage(tab.id, { type: "TD_RECORD_PAGE" });
       const data = response?.data;
-      if (data && (data.company || data.jobTitle)) {
+      if (data && data.confidence === "low") {
+        lowConfidence = true;
+      } else if (data && (data.company || data.jobTitle)) {
         payload = data;
       }
     } catch {
       // 该网站没有注入追踪脚本，走标题兜底
     }
+    if (lowConfidence) {
+      setStatus("当前页面没有识别到岗位或投递信息，未记录。请打开岗位详情页或网申表单页后再试。", true);
+      return;
+    }
     if (!payload) {
       const guess = parseTitleGuess(tab.title);
+      if (!guess.company && !guess.jobTitle) {
+        setStatus("当前页面标题里也找不到岗位信息，未记录。", true);
+        return;
+      }
+      const confirmed = window.confirm(
+        `即将记录本页投递：\n\n岗位：${guess.jobTitle || "（未识别）"}\n公司：${guess.company || "（未识别）"}\n\n信息来自页面标题，可能不准（可在看板里修改）。确定记录吗？`
+      );
+      if (!confirmed) {
+        return;
+      }
       payload = { company: guess.company, jobTitle: guess.jobTitle };
     }
     const result = await sendRuntimeMessage({
