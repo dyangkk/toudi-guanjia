@@ -308,6 +308,52 @@
     // 页面环境异常时静默放弃监听
   }
 
+  // ---------- 投递记录/沟通页：自动提示同步 ----------
+  // Boss 的"沟通"页等记录页 URL 特征匹配后，右下角出现同步入口
+
+  let hintShownFor = "";
+  function maybeShowSyncHint() {
+    const RECORD_PAGE_RE = /\/(web\/geek\/chat|deliver|applied|apply[-_]?record|my[-_]?apply|chat)/i;
+    const key = location.pathname;
+    if (!RECORD_PAGE_RE.test(key) || hintShownFor === key || document.getElementById("__td_sync_hint__")) {
+      return;
+    }
+    hintShownFor = key;
+    const wrap = document.createElement("div");
+    wrap.id = "__td_sync_hint__";
+    Object.assign(wrap.style, {
+      position: "fixed",
+      right: "20px",
+      bottom: "90px",
+      zIndex: "2147483646",
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+      background: "rgba(30, 35, 60, 0.92)",
+      color: "#fff",
+      padding: "10px 14px",
+      borderRadius: "12px",
+      fontSize: "13px",
+      boxShadow: "0 6px 24px rgba(0,0,0,0.25)"
+    });
+    const btn = document.createElement("span");
+    btn.textContent = "📥 同步本页投递记录";
+    btn.style.cursor = "pointer";
+    btn.addEventListener("click", () => {
+      wrap.remove();
+      void openPicker();
+    });
+    const close = document.createElement("span");
+    close.textContent = "×";
+    close.style.cssText = "cursor:pointer;opacity:.6;font-size:16px;padding:0 2px;";
+    close.addEventListener("click", () => wrap.remove());
+    wrap.append(btn, close);
+    document.documentElement.appendChild(wrap);
+  }
+
+  setInterval(maybeShowSyncHint, 2500);
+  setTimeout(maybeShowSyncHint, 1500);
+
   // ---------- popup 消息：手动记录 / 批量补记 / 诊断 ----------
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -421,6 +467,70 @@
     return "";
   }
 
+  // ---------- 通用条目扫描：投递记录页 / 沟通页的岗位条目识别 ----------
+  // 不依赖站点专属选择器：找页面上"像岗位条目"的列表项（含薪资样式或公司后缀）
+
+  function collectGenericEntries() {
+    const SALARY_RE = /\d+\s*[-~～]\s*\d+\s*[Kk万]/;
+    const COMPANY_RE = /(有限公司|有限责任公司|集团|事务所|研究院|科技公司|网络公司)/;
+    const out = [];
+    const seen = new Set();
+    let nodes = Array.from(document.querySelectorAll('li, [class*="item"], [class*="card"]'));
+    if (nodes.length > 400) {
+      nodes = nodes.slice(0, 400);
+    }
+    for (const node of nodes) {
+      if (!(node instanceof Element)) {
+        continue;
+      }
+      // 跳过容器级元素，只取条目级
+      if (node.querySelectorAll("li").length > 2) {
+        continue;
+      }
+      const text = (node.innerText || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length < 8 || text.length > 220) {
+        continue;
+      }
+      const salary = (text.match(SALARY_RE) || [""])[0];
+      let company = "";
+      for (const token of text.split(" ")) {
+        if (token.length >= 4 && token.length <= 30 && COMPANY_RE.test(token)) {
+          company = token;
+          break;
+        }
+      }
+      if (!salary && !company) {
+        continue;
+      }
+      const link = node.querySelector("a[href]");
+      let jobTitle = (link?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      if (!jobTitle) {
+        jobTitle = (text.split(" ")[0] || "").slice(0, 40);
+      }
+      if (!jobTitle) {
+        continue;
+      }
+      const key = `${jobTitle}|${company}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      let url = location.href;
+      if (link) {
+        try {
+          url = new URL(link.getAttribute("href"), location.origin).href;
+        } catch {
+          // 保持默认地址
+        }
+      }
+      out.push({ company, jobTitle, salary, city: "", url, jobId: "" });
+      if (out.length >= 80) {
+        break;
+      }
+    }
+    return out;
+  }
+
   // ---------- 本页批量补记浮层 ----------
 
   async function openPicker() {
@@ -428,7 +538,17 @@
       return;
     }
     const result = (await bridgeRequest("collect-cards", BRIDGE_SLOW_TIMEOUT_MS)) || fallbackCollectCards();
-    const cards = (result?.cards || []).slice(0, 60);
+    let cards = result?.cards || [];
+    // 合并通用条目扫描（覆盖投递记录页/沟通页等非标准列表）
+    const seenKeys = new Set(cards.map((c) => `${c.jobTitle}|${c.company}`));
+    for (const entry of collectGenericEntries()) {
+      const key = `${entry.jobTitle}|${entry.company}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        cards.push(entry);
+      }
+    }
+    cards = cards.slice(0, 100);
     if (!cards.length) {
       showToast("没在本页找到岗位卡片");
       return;

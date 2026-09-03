@@ -148,6 +148,23 @@ export async function addRecord(payload = {}, source = "auto") {
     }
   }
 
+  // 5) 手动批量导入：同平台同公司同岗位视为已存在（重复同步不产生重复记录）
+  if (source === "manual") {
+    const company = cleanText(payload.company);
+    const jobTitle = cleanText(payload.jobTitle);
+    if (company && jobTitle) {
+      const dupManual = records.find(
+        (r) => r.platform === platform && r.company === company && r.jobTitle === jobTitle
+      );
+      if (dupManual) {
+        dupManual.updatedAt = now;
+        dupManual.hitCount = (dupManual.hitCount || 1) + 1;
+        await writeAll(records);
+        return { record: dupManual, duplicate: true };
+      }
+    }
+  }
+
   const record = {
     id: makeId(),
     platform,
