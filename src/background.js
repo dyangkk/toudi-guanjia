@@ -83,6 +83,51 @@ chrome.alarms?.onAlarm.addListener((alarm) => {
 void setupUpdateAlarm().catch(() => undefined);
 void refreshUpdateBadge().catch(() => undefined);
 
+// ---------- 浏览器级投递监听（webRequest） ----------
+// 不依赖页面脚本：投递请求经过浏览器时后台直接看到 URL。
+// Boss 的投递请求 /wapi/zpgeek/friend/add.json?jobId=...&securityId=...&lid=... 已核实。
+const TD_WATCH_URLS = [
+  "*://*.zhipin.com/*",
+  "*://*.liepin.com/*",
+  "*://*.zhaopin.com/*",
+  "*://*.51job.com/*",
+  "*://*.nowcoder.com/*",
+  "*://*.lagou.com/*"
+];
+const TD_VERIFIED_APPLY_RE = /\/wapi\/zpgeek\/friend\/add(\.json)?/i;
+const TD_GENERIC_APPLY_RE = /(friend\/add|deliver|apply|sendresume|greet)/i;
+
+chrome.webRequest?.onBeforeRequest?.addListener(
+  (details) => {
+    if (!details || details.tabId < 0 || details.type === "image" || details.type === "stylesheet") {
+      return;
+    }
+    let path = "";
+    try {
+      path = new URL(details.url).pathname;
+    } catch {
+      return;
+    }
+    const verified = TD_VERIFIED_APPLY_RE.test(path);
+    if (!verified && !TD_GENERIC_APPLY_RE.test(path)) {
+      return;
+    }
+    // 转发给该标签页的隔离世界脚本做信息提取（无需页面世界参与）
+    try {
+      chrome.tabs.sendMessage(
+        details.tabId,
+        { type: "TD_NET_APPLY", payload: { url: details.url, verified, method: details.method } },
+        () => {
+          void chrome.runtime.lastError; // 页面没有接收方时静默忽略
+        }
+      );
+    } catch {
+      // 发送失败忽略
+    }
+  },
+  { urls: TD_WATCH_URLS }
+);
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string" || !/^(OJAF_|TD_)/.test(message.type)) {
     return undefined;

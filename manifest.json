@@ -1,17 +1,24 @@
 {
   "manifest_version": 3,
   "name": "投递管家",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "一键填写网申表单，自动记录每次投递的公司、岗位与进展状态，数据全部保存在本机。",
   "permissions": [
     "activeTab",
     "alarms",
     "scripting",
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "webRequest"
   ],
   "host_permissions": [
-    "https://api.github.com/*"
+    "https://api.github.com/*",
+    "*://*.zhipin.com/*",
+    "*://*.liepin.com/*",
+    "*://*.zhaopin.com/*",
+    "*://*.51job.com/*",
+    "*://*.nowcoder.com/*",
+    "*://*.lagou.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

@@ -87,9 +87,11 @@ export async function listRecords() {
 export async function addRecord(payload = {}, source = "auto") {
   const url = normalizeUrl(payload.url);
   const now = Date.now();
+  const platform = payload.platform || detectPlatform(payload.url);
+  const jobId = cleanText(payload.jobId, 64);
   const records = await readAll();
 
-  // 同一页面短时间内的多次信号（点击 + 成功提示）视为同一次投递
+  // 1) 同 URL 10 分钟内视为重复信号
   const duplicate = records.find(
     (r) => url && r.url === url && now - r.appliedAt < DEDUPE_WINDOW_MS
   );
@@ -100,14 +102,60 @@ export async function addRecord(payload = {}, source = "auto") {
     return { record: duplicate, duplicate: true };
   }
 
+  // 2) 同 jobId 10 分钟内视为重复信号（网络信号与页面信号重叠）
+  if (jobId) {
+    const dupByJob = records.find(
+      (r) => r.jobId && r.jobId === jobId && now - r.appliedAt < DEDUPE_WINDOW_MS
+    );
+    if (dupByJob) {
+      dupByJob.updatedAt = now;
+      dupByJob.hitCount = (dupByJob.hitCount || 1) + 1;
+      await writeAll(records);
+      return { record: dupByJob, duplicate: true };
+    }
+  }
+
+  // 3) 精确信号（带 jobId）紧跟在模糊信号（点击、无 jobId）之后：合并补全那条记录
+  if (jobId) {
+    const mergeTarget = records.find(
+      (r) => !r.jobId && r.platform === platform && now - r.appliedAt < 8000
+    );
+    if (mergeTarget) {
+      mergeTarget.jobId = jobId;
+      mergeTarget.url = url;
+      mergeTarget.rawUrl = cleanText(payload.url, 500);
+      mergeTarget.company = mergeTarget.company || cleanText(payload.company);
+      mergeTarget.jobTitle = mergeTarget.jobTitle || cleanText(payload.jobTitle);
+      mergeTarget.salary = mergeTarget.salary || cleanText(payload.salary);
+      mergeTarget.city = mergeTarget.city || cleanText(payload.city);
+      mergeTarget.updatedAt = now;
+      mergeTarget.hitCount = (mergeTarget.hitCount || 1) + 1;
+      await writeAll(records);
+      return { record: mergeTarget, duplicate: true };
+    }
+  }
+
+  // 4) 模糊信号紧跟在精确信号之后：忽略（精确记录已存在）
+  if (!jobId) {
+    const afterPrecise = records.find(
+      (r) => r.jobId && r.platform === platform && now - r.appliedAt < 8000
+    );
+    if (afterPrecise) {
+      afterPrecise.updatedAt = now;
+      afterPrecise.hitCount = (afterPrecise.hitCount || 1) + 1;
+      await writeAll(records);
+      return { record: afterPrecise, duplicate: true };
+    }
+  }
+
   const record = {
     id: makeId(),
-    platform: payload.platform || detectPlatform(payload.url),
+    platform,
     company: cleanText(payload.company),
     jobTitle: cleanText(payload.jobTitle),
     city: cleanText(payload.city),
     salary: cleanText(payload.salary),
-    jobId: cleanText(payload.jobId, 64),
+    jobId,
     url,
     rawUrl: cleanText(payload.url, 500),
     source,

@@ -21,6 +21,8 @@
 
   let lastSignalAt = 0;
   let lastSignalUrl = "";
+  let lastClickCard = null;
+  let lastDomClickAt = 0;
   const pendingBridge = new Map(); // requestId -> {resolve, timer}
 
   // ---------- 与页面世界的桥 ----------
@@ -197,6 +199,58 @@
     });
   }
 
+  // ---------- 浏览器级网络信号（background webRequest 转发） ----------
+  // 不依赖页面世界脚本：投递请求的 URL 里自带 jobId，用它在页面里反查对应卡片。
+
+  function handleNetApply(payload = {}) {
+    const verified = Boolean(payload.verified);
+    const recentClick = Date.now() - lastDomClickAt < 15000;
+    if (!verified && !recentClick) {
+      return; // 通用端点必须配合用户点击才认定
+    }
+    const params = { jobId: "", securityId: "", lid: "" };
+    try {
+      const u = new URL(payload.url || "");
+      for (const key of Object.keys(params)) {
+        params[key] = u.searchParams.get(key) || "";
+      }
+    } catch {
+      // URL 解析失败，参数留空
+    }
+    const jobId = params.jobId;
+    let card = null;
+    if (jobId) {
+      for (const node of document.querySelectorAll(JOB_CARD_SELECTOR)) {
+        const link = node.querySelector?.("a[href]");
+        if (link && (link.href || "").includes(jobId)) {
+          card = node;
+          break;
+        }
+      }
+    }
+    if (!card) {
+      card = lastClickCard;
+    }
+    const info = card ? extractCardDom(card) : localExtract();
+    let recordUrl = location.href;
+    if (jobId) {
+      const query = [];
+      if (params.securityId) query.push(`securityId=${encodeURIComponent(params.securityId)}`);
+      if (params.lid) query.push(`lid=${encodeURIComponent(params.lid)}`);
+      recordUrl = `https://www.zhipin.com/job_detail/${jobId}.html${query.length ? `?${query.join("&")}` : ""}`;
+    }
+    recordAttempt({ ...info, url: recordUrl, jobId, source: "webrequest" });
+  }
+
+  function extractCardDom(card) {
+    return {
+      jobTitle: pickFrom(card, ['[class*="job-name"]', '[class*="job-title"]', ".job-name", ".job-title"]),
+      company: pickFrom(card, ['[class*="company-name"]', ".company-name", '[class*="company"]']),
+      salary: pickFrom(card, ['[class*="salary"]', ".salary"]),
+      city: ""
+    };
+  }
+
   // ---------- 信号 2：点击监听（捕获阶段，只在按钮类元素上匹配文案） ----------
 
   function isButtonLike(el) {
@@ -220,6 +274,8 @@
         }
         const text = (node.textContent || "").replace(/\s+/g, " ").trim();
         if (text && text.length <= 30 && APPLY_TEXT_RE.test(text)) {
+          lastClickCard = node.closest(JOB_CARD_SELECTOR);
+          lastDomClickAt = Date.now();
           recordAttempt({ source: "dom" });
           return;
         }
@@ -255,6 +311,21 @@
   // ---------- popup 消息：手动记录 / 批量补记 / 诊断 ----------
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "TD_PING") {
+      sendResponse({ ok: true, data: {} });
+      return false;
+    }
+
+    if (message?.type === "TD_NET_APPLY") {
+      try {
+        handleNetApply(message.payload || {});
+      } catch {
+        // 任何异常不影响页面
+      }
+      sendResponse({ ok: true, data: {} });
+      return false;
+    }
+
     if (message?.type === "TD_RECORD_PAGE") {
       void (async () => {
         try {
@@ -283,6 +354,7 @@
           data: {
             contentLoaded: true,
             pageUrl: location.href,
+            ua: navigator.userAgent,
             mainWorld: main || { reachable: false }
           }
         });

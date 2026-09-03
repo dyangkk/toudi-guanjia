@@ -213,11 +213,31 @@ function parseTitleGuess(title) {
   };
 }
 
+async function ensureTrackerInTab(tabId) {
+  try {
+    await sendTabMessage(tabId, { type: "TD_PING" });
+    return true;
+  } catch {
+    // 页面在插件重载前就已打开（脚本未注入），尝试按需补注入
+    try {
+      await executeScript(tabId, "src/tracker-content.js");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 async function openPickerOnPage() {
   try {
     const [tab] = await queryTabs({ active: true, currentWindow: true });
     if (!tab?.id) {
       throw new Error("No active tab found.");
+    }
+    const ready = await ensureTrackerInTab(tab.id);
+    if (!ready) {
+      setStatus("当前页面无法注入脚本。请刷新该页面（F5）后再试。", true);
+      return;
     }
     await sendTabMessage(tab.id, { type: "TD_OPEN_PICKER" });
     window.close();

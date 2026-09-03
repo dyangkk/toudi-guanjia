@@ -34,6 +34,7 @@ function renderBasic() {
   const rows = [
     ["页面地址", report.pageUrl || "—"],
     ["识别的平台", PLATFORM_LABELS[main.platform] || main.platform || "—"],
+    ["浏览器标识", String(report.ua || "—").slice(0, 110)],
     ["追踪脚本（隔离世界）", report.contentLoaded ? span("已加载", true) : span("未加载（不是招聘站点或未刷新页面）", false)]
   ];
   fillTable("basicTable", rows);
