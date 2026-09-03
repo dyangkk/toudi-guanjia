@@ -6,7 +6,9 @@ const els = {
   clearMarksBtn: document.getElementById("clearMarksBtn"),
   tdSummary: document.getElementById("tdSummary"),
   tdOpenDashboard: document.getElementById("tdOpenDashboard"),
-  tdRecordPage: document.getElementById("tdRecordPage")
+  tdRecordPage: document.getElementById("tdRecordPage"),
+  tdPickPage: document.getElementById("tdPickPage"),
+  tdDiagnose: document.getElementById("tdDiagnose")
 };
 
 const DEFAULT_START_LABEL = els.startAutofillBtn.textContent;
@@ -26,6 +28,12 @@ els.tdOpenDashboard.addEventListener("click", () => {
 });
 els.tdRecordPage.addEventListener("click", () => {
   void recordCurrentPage();
+});
+els.tdPickPage.addEventListener("click", () => {
+  void openPickerOnPage();
+});
+els.tdDiagnose.addEventListener("click", () => {
+  void diagnosePage();
 });
 
 initialize();
@@ -203,6 +211,42 @@ function parseTitleGuess(title) {
     jobTitle: parts[0] || "",
     company: parts.length >= 2 ? parts[1] : ""
   };
+}
+
+async function openPickerOnPage() {
+  try {
+    const [tab] = await queryTabs({ active: true, currentWindow: true });
+    if (!tab?.id) {
+      throw new Error("No active tab found.");
+    }
+    await sendTabMessage(tab.id, { type: "TD_OPEN_PICKER" });
+    window.close();
+  } catch (error) {
+    setStatus(`请先打开招聘网站（Boss直聘/猎聘/智联等）的职位页面再使用补记。${error.message ? `（${error.message}）` : ""}`, true);
+  }
+}
+
+async function diagnosePage() {
+  els.tdDiagnose.disabled = true;
+  try {
+    const [tab] = await queryTabs({ active: true, currentWindow: true });
+    const report = { pageUrl: tab?.url || "", contentLoaded: false, mainWorld: null };
+    if (tab?.id) {
+      try {
+        const response = await sendTabMessage(tab.id, { type: "TD_DIAGNOSE" });
+        if (response?.ok && response.data) {
+          Object.assign(report, response.data);
+        }
+      } catch {
+        // 该页面没有注入追踪脚本
+      }
+    }
+    await chrome.storage.session.set({ tdDiagnoseReport: report });
+    await chrome.tabs.create({ url: chrome.runtime.getURL("src/diagnose.html") });
+    window.close();
+  } finally {
+    els.tdDiagnose.disabled = false;
+  }
 }
 
 function formatRuntimeAiNote(aiUsage = {}, elapsed = "") {

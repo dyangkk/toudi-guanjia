@@ -21,6 +21,15 @@
   const CLICK_WINDOW_MS = 20 * 1000;
 
   let lastApplyClick = null; // { card: Element | null, at: number }
+  const signalLog = []; // 诊断日志：记录所有捕获到的信号，最多保留 40 条
+  const SIGNAL_LOG_MAX = 40;
+
+  function logSignal(kind, info) {
+    signalLog.push({ time: new Date().toLocaleTimeString("zh-CN", { hour12: false }), kind, info });
+    if (signalLog.length > SIGNAL_LOG_MAX) {
+      signalLog.splice(0, signalLog.length - SIGNAL_LOG_MAX);
+    }
+  }
 
   // ---------- 事件桥（跨世界传 JSON 字符串，避免对象隔离问题） ----------
 
@@ -54,6 +63,7 @@
         const text = (node.textContent || "").replace(/\s+/g, " ").trim();
         if (text && text.length <= 30 && APPLY_TEXT_RE.test(text)) {
           lastApplyClick = { card: node.closest(JOB_CARD_SELECTOR), at: Date.now() };
+          logSignal("click", `按钮「${text.slice(0, 16)}」，卡片：${lastApplyClick.card ? "已定位" : "未定位"}`);
           return;
         }
       }
@@ -138,6 +148,7 @@
       if (!verified && !clickedRecently) {
         return; // 通用端点必须配合用户点击才认定
       }
+      logSignal("endpoint", `${verified ? "已核实" : "启发式"}端点：${url.pathname}${body ? "" : ""}`);
 
       let body = null;
       try {
@@ -146,10 +157,13 @@
         body = null;
       }
       if (body && !isSuccessResponse(body)) {
+        logSignal("endpoint", `响应未判定为成功（code=${body.code ?? "无"}），忽略`);
         return;
       }
 
-      emit("td:apply", buildPayload(url, body));
+      const payload = buildPayload(url, body);
+      logSignal("emit", `已发投递信号：${payload.company || "?"} · ${payload.jobTitle || "?"}`);
+      emit("td:apply", payload);
     } catch {
       // 任何异常都不影响页面自身逻辑
     }
@@ -412,6 +426,106 @@
     }
     const data = bestEffortPageExtract();
     emit("td:extract-result", { requestId, data });
+  });
+
+  // ---------- 批量补记：收集当前页所有岗位卡片 ----------
+
+  window.addEventListener("td:collect-cards-request", (event) => {
+    let requestId = "";
+    try {
+      requestId = JSON.parse(event.detail || "{}").requestId || "";
+    } catch {
+      // 解析失败按空处理
+    }
+    emit("td:collect-cards-result", { requestId, data: collectPageCards() });
+  });
+
+  function collectPageCards() {
+    const platform = detectPlatform();
+    const cards = [];
+    try {
+      const nodes = document.querySelectorAll(JOB_CARD_SELECTOR);
+      const limit = Math.min(nodes.length, 60);
+      for (let i = 0; i < limit; i += 1) {
+        const node = nodes[i];
+        let info = null;
+        if (platform === "boss") {
+          info = extractBossCard(node, {});
+        }
+        if (!info) {
+          const dom = extractFromCardDom(node);
+          info = {
+            company: dom.company,
+            jobTitle: dom.jobTitle,
+            salary: dom.salary,
+            url: dom.url
+          };
+        }
+        if (info && (info.company || info.jobTitle)) {
+          cards.push({
+            company: info.company || "",
+            jobTitle: info.jobTitle || "",
+            salary: info.salary || "",
+            city: info.city || "",
+            url: info.url || location.href,
+            jobId: info.jobId || ""
+          });
+        }
+      }
+    } catch {
+      // 收集失败返回已收集部分
+    }
+    return { platform, total: cards.length, cards };
+  }
+
+  // ---------- 诊断：自检 + 信号日志 ----------
+
+  window.addEventListener("td:diagnose-request", (event) => {
+    let requestId = "";
+    try {
+      requestId = JSON.parse(event.detail || "{}").requestId || "";
+    } catch {
+      // 解析失败按空处理
+    }
+    let fetchWrapped = false;
+    try {
+      fetchWrapped = window.fetch.toString().includes("patchedFetch");
+    } catch {
+      fetchWrapped = false;
+    }
+    let xhrWrapped = false;
+    try {
+      xhrWrapped = String(XMLHttpRequest.prototype.open).includes("patchedOpen");
+    } catch {
+      xhrWrapped = false;
+    }
+    let cardCount = 0;
+    try {
+      cardCount = document.querySelectorAll(JOB_CARD_SELECTOR).length;
+    } catch {
+      cardCount = 0;
+    }
+    const vueSample = (() => {
+      try {
+        const first = document.querySelector(".job-card-wrapper") || document.querySelector(JOB_CARD_SELECTOR);
+        const data = readVueJobData(first);
+        return data ? { ok: true, jobName: firstString(data, ["jobName"]), brandName: firstString(data, ["brandName"]) } : { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    })();
+    emit("td:diagnose-result", {
+      requestId,
+      data: {
+        platform: detectPlatform(),
+        url: location.href,
+        fetchWrapped,
+        xhrWrapped,
+        cardCount,
+        vueSample,
+        signalLog: signalLog.slice()
+      }
+    });
   });
 
   function bestEffortPageExtract() {

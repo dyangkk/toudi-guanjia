@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>投递管家 · 页面诊断</title>
+    <link rel="stylesheet" href="./diagnose.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">投</span>
+        <div>
+          <h1>页面诊断报告</h1>
+          <p>排查"没有自动记录"的问题。点投递后再诊断，日志会显示捕获过程；截图发给开发者可快速定位。</p>
+        </div>
+      </div>
+      <button id="copyBtn" class="secondary" type="button">复制诊断 JSON</button>
+    </header>
+
+    <main class="page">
+      <section class="card">
+        <h2>基本信息</h2>
+        <table class="kv" id="basicTable"></table>
+      </section>
+
+      <section class="card">
+        <h2>组件状态</h2>
+        <table class="kv" id="statusTable"></table>
+        <p class="hint" id="statusHint"></p>
+      </section>
+
+      <section class="card">
+        <h2>信号日志（最近 40 条）</h2>
+        <p class="hint">在招聘页面点一次"立即沟通/投递简历"，然后回来点"诊断本页"，这里应出现 click 和 endpoint 记录。如果什么都没有，说明监听层没有工作。</p>
+        <table class="logs" id="logTable"></table>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="./diagnose.js"></script>
+  </body>
+</html>

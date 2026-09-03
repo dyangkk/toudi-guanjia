@@ -3,7 +3,7 @@
 //   1. td:apply 桥事件 —— tracker-page.js 在页面世界监听投递接口的成功响应（最准）
 //   2. 点击"投递/沟通"类按钮 —— DOM 兜底
 //   3. 页面出现"投递成功"提示 —— DOM 兜底
-//   4. popup 发来的 TD_RECORD_PAGE —— 手动记录，会向页面世界请求精确提取
+//   4. popup 消息 —— 手动记录 / 本页批量补记 / 诊断
 // 所有信号统一走 recordAttempt()：同 URL 8 秒内只记一次，background 再做 10 分钟级去重。
 (() => {
   if (window.__TD_TRACKER_LOADED__) {
@@ -14,11 +14,55 @@
   const APPLY_TEXT_RE = /(立即沟通|继续沟通|投递简历|立即投递|快速投递|立即申请|申请职位|发送简历|投个简历)/;
   const SUCCESS_TEXT_RE = /(投递成功|已投递|简历已发送|已发送简历|申请成功)/;
   const SIGNAL_THROTTLE_MS = 8000;
-  const EXTRACT_TIMEOUT_MS = 900;
+  const BRIDGE_TIMEOUT_MS = 900;
+  const BRIDGE_SLOW_TIMEOUT_MS = 1500;
+  const JOB_CARD_SELECTOR =
+    '.job-card-wrapper,.job-card-wrap,.job-card-box,[class*="job-card"],[class*="job-item"],[class*="position-item"],[class*="job-list-item"]';
 
   let lastSignalAt = 0;
   let lastSignalUrl = "";
-  const pendingExtracts = new Map(); // requestId -> {resolve, timer}
+  const pendingBridge = new Map(); // requestId -> {resolve, timer}
+
+  // ---------- 与页面世界的桥 ----------
+
+  function bridgeRequest(kind, timeoutMs = BRIDGE_TIMEOUT_MS) {
+    return new Promise((resolve) => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timer = setTimeout(() => {
+        pendingBridge.delete(requestId);
+        resolve(null);
+      }, timeoutMs);
+      pendingBridge.set(requestId, { resolve, timer });
+      try {
+        window.dispatchEvent(
+          new CustomEvent(`td:${kind}-request`, { detail: JSON.stringify({ requestId }) })
+        );
+      } catch {
+        clearTimeout(timer);
+        pendingBridge.delete(requestId);
+        resolve(null);
+      }
+    });
+  }
+
+  function handleBridgeResult(event) {
+    let payload = {};
+    try {
+      payload = JSON.parse(event.detail || "{}");
+    } catch {
+      return;
+    }
+    const pending = pendingBridge.get(payload.requestId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingBridge.delete(payload.requestId);
+      pending.resolve(payload.data ?? null);
+    }
+  }
+
+  for (const kind of ["extract", "collect-cards", "diagnose"]) {
+    window.addEventListener(`td:${kind}-result`, handleBridgeResult);
+  }
 
   // ---------- 信号 1：页面世界的网络监听结果 ----------
 
@@ -30,57 +74,6 @@
       return;
     }
     recordAttempt(payload);
-  });
-
-  // ---------- 信号 4：popup 手动记录 ----------
-
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "TD_RECORD_PAGE") {
-      return undefined;
-    }
-    void (async () => {
-      try {
-        const extracted = await requestPageExtract();
-        sendResponse({ ok: true, data: extracted });
-      } catch (error) {
-        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
-      }
-    })();
-    return true; // 异步响应
-  });
-
-  // 向页面世界请求最优提取（超时则返回空，由本地提取兜底）
-  function requestPageExtract() {
-    return new Promise((resolve) => {
-      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const timer = setTimeout(() => {
-        pendingExtracts.delete(requestId);
-        resolve(null);
-      }, EXTRACT_TIMEOUT_MS);
-      pendingExtracts.set(requestId, { resolve, timer });
-      try {
-        window.dispatchEvent(new CustomEvent("td:extract-request", { detail: JSON.stringify({ requestId }) }));
-      } catch {
-        clearTimeout(timer);
-        pendingExtracts.delete(requestId);
-        resolve(null);
-      }
-    });
-  }
-
-  window.addEventListener("td:extract-result", (event) => {
-    let payload = {};
-    try {
-      payload = JSON.parse(event.detail || "{}");
-    } catch {
-      return;
-    }
-    const pending = pendingExtracts.get(payload.requestId);
-    if (pending) {
-      clearTimeout(pending.timer);
-      pendingExtracts.delete(payload.requestId);
-      pending.resolve(payload.data || null);
-    }
   });
 
   // ---------- 站点本地提取（网络信号缺字段时兜底） ----------
@@ -192,6 +185,18 @@
       .catch(() => undefined);
   }
 
+  function sendAddRecord(payload) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "TD_ADD_RECORD", payload }, (response) => {
+        if (chrome.runtime.lastError || !response?.ok) {
+          resolve(null);
+          return;
+        }
+        resolve(response.data || {});
+      });
+    });
+  }
+
   // ---------- 信号 2：点击监听（捕获阶段，只在按钮类元素上匹配文案） ----------
 
   function isButtonLike(el) {
@@ -245,6 +250,262 @@
     toastObserver.observe(document.documentElement, { childList: true, subtree: true });
   } catch {
     // 页面环境异常时静默放弃监听
+  }
+
+  // ---------- popup 消息：手动记录 / 批量补记 / 诊断 ----------
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "TD_RECORD_PAGE") {
+      void (async () => {
+        try {
+          const extracted = await bridgeRequest("extract");
+          sendResponse({ ok: true, data: extracted });
+        } catch (error) {
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      })();
+      return true;
+    }
+
+    if (message?.type === "TD_COLLECT_CARDS") {
+      void (async () => {
+        const result = (await bridgeRequest("collect-cards", BRIDGE_SLOW_TIMEOUT_MS)) || fallbackCollectCards();
+        sendResponse({ ok: true, data: result });
+      })();
+      return true;
+    }
+
+    if (message?.type === "TD_DIAGNOSE") {
+      void (async () => {
+        const main = await bridgeRequest("diagnose", BRIDGE_SLOW_TIMEOUT_MS);
+        sendResponse({
+          ok: true,
+          data: {
+            contentLoaded: true,
+            pageUrl: location.href,
+            mainWorld: main || { reachable: false }
+          }
+        });
+      })();
+      return true;
+    }
+
+    if (message?.type === "TD_OPEN_PICKER") {
+      void openPicker();
+      sendResponse({ ok: true, data: {} });
+      return false;
+    }
+
+    return undefined;
+  });
+
+  // DOM 兜底收集（页面世界脚本不可用时）
+  function fallbackCollectCards() {
+    const cards = [];
+    try {
+      const nodes = document.querySelectorAll(JOB_CARD_SELECTOR);
+      for (const node of Array.from(nodes).slice(0, 60)) {
+        const jobTitle = pickFrom(node, ['[class*="job-name"]', '[class*="job-title"]', ".job-name", ".job-title"]);
+        const company = pickFrom(node, ['[class*="company-name"]', ".company-name", '[class*="company"]']);
+        if (!jobTitle && !company) {
+          continue;
+        }
+        let url = location.href;
+        const link = node.querySelector?.('a[href]');
+        if (link) {
+          try {
+            url = new URL(link.getAttribute("href"), location.origin).href;
+          } catch {
+            // 保持默认
+          }
+        }
+        cards.push({
+          company,
+          jobTitle,
+          salary: pickFrom(node, ['[class*="salary"]', ".salary"]),
+          city: "",
+          url,
+          jobId: ""
+        });
+      }
+    } catch {
+      // 返回已收集部分
+    }
+    return { platform: "web", total: cards.length, cards };
+  }
+
+  function pickFrom(root, selectors, max = 60) {
+    for (const selector of selectors) {
+      try {
+        const el = root.querySelector(selector);
+        const text = el?.textContent?.replace(/\s+/g, " ").trim();
+        if (text) {
+          return text.slice(0, max);
+        }
+      } catch {
+        // 非法选择器，跳过
+      }
+    }
+    return "";
+  }
+
+  // ---------- 本页批量补记浮层 ----------
+
+  async function openPicker() {
+    if (document.getElementById("__td_picker__")) {
+      return;
+    }
+    const result = (await bridgeRequest("collect-cards", BRIDGE_SLOW_TIMEOUT_MS)) || fallbackCollectCards();
+    const cards = (result?.cards || []).slice(0, 60);
+    if (!cards.length) {
+      showToast("没在本页找到岗位卡片");
+      return;
+    }
+
+    const panel = document.createElement("div");
+    panel.id = "__td_picker__";
+    Object.assign(panel.style, {
+      position: "fixed",
+      right: "16px",
+      top: "76px",
+      width: "380px",
+      maxHeight: "70vh",
+      zIndex: "2147483647",
+      background: "#fff",
+      borderRadius: "14px",
+      boxShadow: "0 18px 50px rgba(15,23,42,0.28)",
+      fontFamily: '"PingFang SC","Microsoft YaHei",system-ui,sans-serif',
+      overflow: "hidden",
+      display: "flex",
+      flexDirection: "column"
+    });
+
+    const header = document.createElement("div");
+    Object.assign(header.style, {
+      background: "linear-gradient(120deg,#2b5cff,#7a4dff)",
+      color: "#fff",
+      padding: "12px 14px",
+      fontSize: "14px",
+      fontWeight: "600"
+    });
+    header.textContent = `选择要补记的投递（本页共 ${cards.length} 个岗位）`;
+
+    const list = document.createElement("div");
+    Object.assign(list.style, { overflowY: "auto", padding: "8px 10px", flex: "1" });
+
+    const checkboxes = [];
+    cards.forEach((card, index) => {
+      const row = document.createElement("label");
+      Object.assign(row.style, {
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "8px",
+        padding: "8px 6px",
+        borderRadius: "8px",
+        cursor: "pointer",
+        fontSize: "13px",
+        lineHeight: "1.5",
+        borderBottom: "1px solid #f0f2f7"
+      });
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.style.marginTop = "3px";
+      box.dataset.index = String(index);
+      checkboxes.push(box);
+      const text = document.createElement("div");
+      text.innerHTML = "";
+      const title = document.createElement("div");
+      title.style.fontWeight = "600";
+      title.textContent = card.jobTitle || "（未识别岗位）";
+      const meta = document.createElement("div");
+      meta.style.color = "#6b7280";
+      meta.style.fontSize = "12px";
+      meta.textContent = [card.company || "（未识别公司）", card.salary].filter(Boolean).join(" · ");
+      text.append(title, meta);
+      row.append(box, text);
+      list.appendChild(row);
+    });
+
+    const footer = document.createElement("div");
+    Object.assign(footer.style, {
+      display: "flex",
+      gap: "8px",
+      padding: "10px 12px",
+      borderTop: "1px solid #eef0f5",
+      background: "#fafbfd"
+    });
+
+    function makeButton(label, primary) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = label;
+      Object.assign(btn.style, {
+        flex: primary ? "1" : "0 0 auto",
+        border: "none",
+        borderRadius: "8px",
+        padding: "8px 12px",
+        fontSize: "13px",
+        cursor: "pointer",
+        background: primary ? "linear-gradient(120deg,#2b5cff,#7a4dff)" : "#eef0f5",
+        color: primary ? "#fff" : "#4b5563",
+        fontWeight: "500"
+      });
+      return btn;
+    }
+
+    const allBtn = makeButton("全选", false);
+    const recordBtn = makeButton(`记录选中（0）`, true);
+    const closeBtn = makeButton("关闭", false);
+
+    function refreshCount() {
+      const count = checkboxes.filter((b) => b.checked).length;
+      recordBtn.textContent = `记录选中（${count}）`;
+    }
+    list.addEventListener("change", refreshCount);
+
+    allBtn.addEventListener("click", () => {
+      const target = !checkboxes.every((b) => b.checked);
+      checkboxes.forEach((b) => {
+        b.checked = target;
+      });
+      refreshCount();
+    });
+
+    closeBtn.addEventListener("click", () => panel.remove());
+
+    recordBtn.addEventListener("click", () => {
+      void (async () => {
+        const selected = checkboxes
+          .filter((b) => b.checked)
+          .map((b) => cards[Number(b.dataset.index)])
+          .filter(Boolean);
+        if (!selected.length) {
+          showToast("请先勾选要补记的岗位");
+          return;
+        }
+        recordBtn.disabled = true;
+        recordBtn.textContent = "记录中...";
+        let added = 0;
+        let duplicated = 0;
+        for (const card of selected) {
+          const result2 = await sendAddRecord({ ...card, source: "manual" });
+          if (!result2) {
+            continue;
+          }
+          if (result2.duplicate) {
+            duplicated += 1;
+          } else {
+            added += 1;
+          }
+        }
+        panel.remove();
+        showToast(`补记完成：新增 ${added} 条${duplicated ? `，${duplicated} 条已存在` : ""}`);
+      })();
+    });
+
+    footer.append(allBtn, recordBtn, closeBtn);
+    panel.append(header, list, footer);
+    document.documentElement.appendChild(panel);
   }
 
   // ---------- 页面右下角轻提示 ----------
