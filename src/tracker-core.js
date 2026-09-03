@@ -165,6 +165,16 @@ export async function addRecord(payload = {}, source = "auto") {
     }
   }
 
+  const formFields = Array.isArray(payload.formFields)
+    ? payload.formFields
+        .slice(0, 30)
+        .map((field) => ({
+          label: cleanText(field?.label, 60),
+          value: cleanText(field?.value, 80)
+        }))
+        .filter((field) => field.label || field.value)
+    : [];
+
   const record = {
     id: makeId(),
     platform,
@@ -173,6 +183,7 @@ export async function addRecord(payload = {}, source = "auto") {
     city: cleanText(payload.city),
     salary: cleanText(payload.salary),
     jobId,
+    formFields,
     url,
     rawUrl: cleanText(payload.url, 500),
     source,

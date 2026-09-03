@@ -94,8 +94,8 @@ const TD_WATCH_URLS = [
   "*://*.nowcoder.com/*",
   "*://*.lagou.com/*"
 ];
+// 只转发已核实的投递端点，避免通用启发式带来的误触发
 const TD_VERIFIED_APPLY_RE = /\/wapi\/zpgeek\/friend\/add(\.json)?/i;
-const TD_GENERIC_APPLY_RE = /(friend\/add|deliver|apply|sendresume|greet)/i;
 
 chrome.webRequest?.onBeforeRequest?.addListener(
   (details) => {
@@ -108,8 +108,7 @@ chrome.webRequest?.onBeforeRequest?.addListener(
     } catch {
       return;
     }
-    const verified = TD_VERIFIED_APPLY_RE.test(path);
-    if (!verified && !TD_GENERIC_APPLY_RE.test(path)) {
+    if (!TD_VERIFIED_APPLY_RE.test(path)) {
       return;
     }
     // 转发给该标签页的隔离世界脚本做信息提取（无需页面世界参与）

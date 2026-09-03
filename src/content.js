@@ -2661,6 +2661,34 @@
     return floating;
   }
 
+  // 向追踪脚本（同一隔离世界）发布"本页已被插件填写"的状态。
+  // 追踪脚本据此在本页监听用户提交/投递动作，实现零误触发的自动记录。
+  function publishTrackerFillState(candidates, filledCount) {
+    try {
+      const fields = [];
+      const list = Array.isArray(candidates) ? candidates : [];
+      for (let index = 0; index < list.length && fields.length < 40; index += 1) {
+        const candidate = list[index];
+        const label = normalizeText(candidate?.fieldLabel || candidate?.sourceLabel || "", 60);
+        let value = candidate?.value;
+        if (Array.isArray(value)) {
+          value = value.join("、");
+        }
+        value = normalizeText(String(value ?? ""), 80);
+        fields.push({ label, value });
+      }
+      window.__TD_AUTOFILL_STATE__ = {
+        at: Date.now(),
+        url: location.href,
+        title: document.title,
+        filled: Number(filledCount || 0),
+        fields
+      };
+    } catch {
+      // 状态发布失败不影响填写流程
+    }
+  }
+
   function setAutofillSummary(summary) {
     const failed = Number(summary?.failed || 0);
     const skipped = Number(summary?.skipped || 0);
@@ -5496,6 +5524,7 @@
         };
         setAutofillSummary(summary);
         updateAutofillDebugResults(summary, []);
+        publishTrackerFillState(plan?.candidates || [], 0);
         return {
           ok: false,
           reason: "no candidates",
@@ -5609,6 +5638,7 @@
     };
     setProfilePanelStatus(`已自动填写 ${filledCount} 项，待处理 ${summary.pending} 项。`);
     setAutofillSummary(summary);
+    publishTrackerFillState(autoFillCandidates, filledCount);
     updateAutofillDebugResults(summary, results);
     await persistProfilePanelState(getProfilePanelStateSnapshot());
     return {

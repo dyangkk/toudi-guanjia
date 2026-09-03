@@ -302,6 +302,23 @@ function buildDetailRow(record) {
   actionsWrap.append(saveBtn, hint);
   grid.appendChild(actionsWrap);
 
+  // 表单填写快照（插件填写过的字段）
+  if (Array.isArray(record.formFields) && record.formFields.length) {
+    const fieldsWrap = document.createElement("div");
+    fieldsWrap.className = "detail-field detail-notes";
+    const fieldsLabel = document.createElement("label");
+    fieldsLabel.textContent = `表单填写快照（${record.formFields.length} 项）`;
+    const fieldsList = document.createElement("ul");
+    fieldsList.style.cssText = "margin:0;padding-left:18px;font-size:12.5px;color:#4b5563;line-height:1.8;";
+    for (const field of record.formFields) {
+      const li = document.createElement("li");
+      li.textContent = `${field.label || "（未命名字段）"}：${field.value || "（未填值）"}`;
+      fieldsList.appendChild(li);
+    }
+    fieldsWrap.append(fieldsLabel, fieldsList);
+    grid.appendChild(fieldsWrap);
+  }
+
   const timeline = document.createElement("ul");
   timeline.className = "timeline";
   const history = Array.isArray(record.statusHistory) ? record.statusHistory : [];

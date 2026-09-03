@@ -1,9 +1,9 @@
 // 投递事件检测（隔离世界，document_idle 注入）。
-// 信号来源（按可靠程度排序）：
-//   1. td:apply 桥事件 —— tracker-page.js 在页面世界监听投递接口的成功响应（最准）
-//   2. 点击"投递/沟通"类按钮 —— DOM 兜底
-//   3. 页面出现"投递成功"提示 —— DOM 兜底
-//   4. popup 消息 —— 手动记录 / 本页批量补记 / 诊断
+// 检测哲学：只在高置信场景记录，宁可漏记也不误记。
+//   1. 表单提交流：本页被插件填写过（content.js 发布 __TD_AUTOFILL_STATE__）
+//      + 用户点了提交/投递 → 记录，并从已填字段提取岗位/城市等信息
+//   2. Boss直聘：后台 webRequest / 页面世界监听已核实的沟通接口
+//   3. 其余场景：popup 手动记录 / 本页同步补记
 // 所有信号统一走 recordAttempt()：同 URL 8 秒内只记一次，background 再做 10 分钟级去重。
 (() => {
   if (window.__TD_TRACKER_LOADED__) {
@@ -12,10 +12,12 @@
   window.__TD_TRACKER_LOADED__ = true;
 
   const APPLY_TEXT_RE = /(立即沟通|继续沟通|投递简历|立即投递|快速投递|立即申请|申请职位|发送简历|投个简历)/;
-  const SUCCESS_TEXT_RE = /(投递成功|已投递|简历已发送|已发送简历|申请成功)/;
   const SIGNAL_THROTTLE_MS = 8000;
   const BRIDGE_TIMEOUT_MS = 900;
   const BRIDGE_SLOW_TIMEOUT_MS = 1500;
+  const AUTOFILL_STATE_TTL_MS = 45 * 60 * 1000;
+  const SUBMIT_ACTION_RE = /(提交|投递|立即申请|发送申请|完成申请)/;
+  const SUBMIT_EXCLUDE_RE = /(下一步|上一步|保存草稿|暂存|登录|注册|验证|取消|预览)/;
   const JOB_CARD_SELECTOR =
     '.job-card-wrapper,.job-card-wrap,.job-card-box,[class*="job-card"],[class*="job-item"],[class*="position-item"],[class*="job-list-item"]';
 
@@ -251,7 +253,8 @@
     };
   }
 
-  // ---------- 信号 2：点击监听（捕获阶段，只在按钮类元素上匹配文案） ----------
+  // ---------- 点击监听（仅做卡片定位，不直接触发记录） ----------
+  // 记录 Boss 网络信号反查卡片失败时的兜底卡片；误触发源头已移除。
 
   function isButtonLike(el) {
     const tag = el.tagName;
@@ -276,7 +279,6 @@
         if (text && text.length <= 30 && APPLY_TEXT_RE.test(text)) {
           lastClickCard = node.closest(JOB_CARD_SELECTOR);
           lastDomClickAt = Date.now();
-          recordAttempt({ source: "dom" });
           return;
         }
       }
@@ -284,29 +286,108 @@
     true
   );
 
-  // ---------- 信号 3：成功提示监听 ----------
-  // 节流由 recordAttempt 内的 isThrottled 统一处理。
+  // ---------- 核心检测：本页被插件填写过 + 用户提交/投递 ----------
 
-  const toastObserver = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (!(node instanceof Element)) {
+  function getFreshFillState() {
+    const state = window.__TD_AUTOFILL_STATE__;
+    if (!state || !state.at || Date.now() - state.at > AUTOFILL_STATE_TTL_MS) {
+      return null;
+    }
+    try {
+      if (new URL(state.url).hostname !== location.hostname) {
+        return null;
+      }
+    } catch {
+      // URL 异常时宽松通过
+    }
+    return state;
+  }
+
+  function detectLocalPlatform() {
+    const host = location.hostname;
+    if (/(^|\.)zhipin\.com$/.test(host)) return "boss";
+    if (/(^|\.)liepin\.com$/.test(host)) return "liepin";
+    if (/(^|\.)zhaopin\.com$/.test(host)) return "zhaopin";
+    if (/(^|\.)51job\.com$/.test(host)) return "job51";
+    if (/(^|\.)nowcoder\.com$/.test(host)) return "nowcoder";
+    if (/(^|\.)lagou\.com$/.test(host)) return "lagou";
+    return "web";
+  }
+
+  function buildFormSubmitPayload(state, trigger) {
+    const fields = Array.isArray(state.fields) ? state.fields : [];
+    const findByLabel = (re) => {
+      for (const field of fields) {
+        if (field?.label && re.test(field.label) && field.value) {
+          return field.value;
+        }
+      }
+      return "";
+    };
+    const titleFallback = parseTitleFallback(state.title || document.title);
+    return {
+      platform: detectLocalPlatform(),
+      url: state.url || location.href,
+      jobTitle:
+        findByLabel(/(应聘|申请).{0,6}(岗位|职位)|岗位名称|职位名称|意向岗位|应聘职位/) ||
+        findByLabel(/岗位|职位/) ||
+        pickText(["h1"]) ||
+        titleFallback.jobTitle,
+      company:
+        findByLabel(/公司|单位|企业/) ||
+        titleFallback.company ||
+        pickText(['[class*="company-name"]', '[class*="companyName"]']),
+      city: findByLabel(/工作城市|期望城市|工作地点|工作地|城市/),
+      salary: "",
+      source: `autofill-${trigger}`,
+      formFields: fields.slice(0, 30)
+    };
+  }
+
+  function maybeRecordFormSubmit(trigger) {
+    const state = getFreshFillState();
+    if (!state) {
+      return;
+    }
+    recordAttempt(buildFormSubmitPayload(state, trigger));
+  }
+
+  // 原生表单提交
+  document.addEventListener(
+    "submit",
+    (event) => {
+      try {
+        if (event.target && event.target.tagName === "FORM") {
+          maybeRecordFormSubmit("form");
+        }
+      } catch {
+        // 忽略异常
+      }
+    },
+    true
+  );
+
+  // SPA 常见的按钮式提交（仅在本页被填写过时生效）
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!getFreshFillState()) {
+        return;
+      }
+      const path = event.composedPath ? event.composedPath() : [event.target];
+      for (const node of path) {
+        if (!(node instanceof Element) || !isButtonLike(node)) {
           continue;
         }
         const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-        if (text && text.length <= 40 && SUCCESS_TEXT_RE.test(text)) {
-          recordAttempt({ source: "toast" });
+        if (text && text.length <= 20 && SUBMIT_ACTION_RE.test(text) && !SUBMIT_EXCLUDE_RE.test(text)) {
+          maybeRecordFormSubmit("button");
           return;
         }
       }
-    }
-  });
-
-  try {
-    toastObserver.observe(document.documentElement, { childList: true, subtree: true });
-  } catch {
-    // 页面环境异常时静默放弃监听
-  }
+    },
+    true
+  );
 
   // ---------- 投递记录/沟通页：自动提示同步 ----------
   // Boss 的"沟通"页等记录页 URL 特征匹配后，右下角出现同步入口

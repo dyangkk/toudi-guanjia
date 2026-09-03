@@ -150,7 +150,7 @@ function renderTrackerSummary(summary = {}) {
   const interview = Number(byStatus.interview || 0);
   const offer = Number(byStatus.offer || 0);
   if (!total) {
-    els.tdSummary.textContent = "还没有投递记录。在招聘网站点击“立即沟通 / 投递简历”会自动记录；也可以用下面的按钮手动记录本页。";
+    els.tdSummary.textContent = "还没有投递记录。用插件填写过的表单页，点提交/投递后会自动记录；Boss直聘沟通也会自动记录；其他情况用下面的按钮补记。";
     return;
   }
   els.tdSummary.textContent = `共 ${total} 条投递，今日 ${today} 条，面试 ${interview}，Offer ${offer}。`;

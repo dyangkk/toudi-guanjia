@@ -11,14 +11,12 @@
   }
   window.__TD_PAGE_BRIDGE__ = true;
 
-  // 已核实的投递端点（Boss直聘：立即沟通/打招呼）
+  // 已核实的投递端点（Boss直聘：立即沟通/打招呼）。
+  // 只监听已核实端点，通用启发式已移除（避免误触发）。
   const VERIFIED_APPLY_ENDPOINTS = [/\/wapi\/zpgeek\/friend\/add(\.json)?/i];
-  // 通用启发式：URL 里带投递语义的词（配合"用户刚点过投递按钮"才认定）
-  const GENERIC_APPLY_ENDPOINT_RE = /(friend\/add|deliver|apply|sendresume|greet)/i;
   const APPLY_TEXT_RE = /(立即沟通|继续沟通|投递简历|立即投递|快速投递|立即申请|申请职位|发送简历|投个简历)/;
   const JOB_CARD_SELECTOR =
     '.job-card-wrapper,.job-card-wrap,.job-card-box,[class*="job-card"],[class*="job-item"],[class*="position-item"],[class*="job-list-item"]';
-  const CLICK_WINDOW_MS = 20 * 1000;
 
   let lastApplyClick = null; // { card: Element | null, at: number }
   const signalLog = []; // 诊断日志：记录所有捕获到的信号，最多保留 40 条
@@ -123,14 +121,7 @@
     if (!url) {
       return false;
     }
-    if (VERIFIED_APPLY_ENDPOINTS.some((re) => re.test(url.pathname))) {
-      return true;
-    }
-    if (!GENERIC_APPLY_ENDPOINT_RE.test(url.pathname)) {
-      return false;
-    }
-    // 通用匹配只看同源请求，避免误伤统计上报等第三方调用
-    return url.origin === location.origin;
+    return VERIFIED_APPLY_ENDPOINTS.some((re) => re.test(url.pathname));
   }
 
   async function handleNetworkSignal(rawUrl, status, readBody) {
@@ -142,13 +133,10 @@
       if (!url) {
         return;
       }
-      const verified = VERIFIED_APPLY_ENDPOINTS.some((re) => re.test(url.pathname));
-      const clickedRecently =
-        lastApplyClick && Date.now() - lastApplyClick.at < CLICK_WINDOW_MS;
-      if (!verified && !clickedRecently) {
-        return; // 通用端点必须配合用户点击才认定
+      if (!VERIFIED_APPLY_ENDPOINTS.some((re) => re.test(url.pathname))) {
+        return;
       }
-      logSignal("endpoint", `${verified ? "已核实" : "启发式"}端点：${url.pathname}${body ? "" : ""}`);
+      logSignal("endpoint", `已核实端点：${url.pathname}`);
 
       let body = null;
       try {
