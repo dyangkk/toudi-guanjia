@@ -161,15 +161,24 @@ async function recordCurrentPage() {
     if (!tab?.id) {
       throw new Error("No active tab found.");
     }
-    const guess = parseTitleGuess(tab.title);
+    // 优先让页面里的追踪脚本做精确提取（Boss 卡片 Vue 数据等）
+    let payload = null;
+    try {
+      const response = await sendTabMessage(tab.id, { type: "TD_RECORD_PAGE" });
+      const data = response?.data;
+      if (data && (data.company || data.jobTitle)) {
+        payload = data;
+      }
+    } catch {
+      // 该网站没有注入追踪脚本，走标题兜底
+    }
+    if (!payload) {
+      const guess = parseTitleGuess(tab.title);
+      payload = { company: guess.company, jobTitle: guess.jobTitle };
+    }
     const result = await sendRuntimeMessage({
       type: "TD_ADD_RECORD",
-      payload: {
-        url: tab.url,
-        company: guess.company,
-        jobTitle: guess.jobTitle,
-        source: "manual"
-      }
+      payload: { ...payload, url: tab.url, source: payload.source || "manual" }
     });
     if (result?.duplicate) {
       setStatus("这一页已经记录过啦，可以在看板里查看。");

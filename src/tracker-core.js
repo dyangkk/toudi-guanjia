@@ -107,6 +107,7 @@ export async function addRecord(payload = {}, source = "auto") {
     jobTitle: cleanText(payload.jobTitle),
     city: cleanText(payload.city),
     salary: cleanText(payload.salary),
+    jobId: cleanText(payload.jobId, 64),
     url,
     rawUrl: cleanText(payload.url, 500),
     source,

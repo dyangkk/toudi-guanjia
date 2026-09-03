@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "投递管家",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "一键填写网申表单，自动记录每次投递的公司、岗位与进展状态，数据全部保存在本机。",
   "permissions": [
     "activeTab",
@@ -28,6 +28,19 @@
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://*.zhipin.com/*",
+        "https://*.liepin.com/*",
+        "https://*.zhaopin.com/*",
+        "https://*.51job.com/*",
+        "https://*.nowcoder.com/*",
+        "https://*.lagou.com/*"
+      ],
+      "js": ["src/tracker-page.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://*.zhipin.com/*",
